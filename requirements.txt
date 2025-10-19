@@ -1,0 +1,40 @@
+addict
+clip
+einops
+fairscale
+fiftyone
+ftfy
+gradio==4.21.0
+huggingface_hub
+ipdb
+kornia
+matplotlib
+numpy
+opencv_python
+opencv_python_headless
+Pillow
+pycocoevalcap
+pycocotools
+pydensecrf @ git+https://github.com/lucasb-eyer/pydensecrf.git
+PyYAML
+regex
+Requests
+scikit_learn
+scipy
+setuptools
+scikit-image
+supervision
+termcolor
+timm
+torch==2.2.0
+torchmetrics
+torchvision
+tqdm
+transformers
+typer
+wget
+yapf
+ram @ git+https://github.com/xinyu1205/recognize-anything.git
+segment_anything @ git+https://github.com/facebookresearch/segment-anything.git
+segment-anything-hq
+prefetch_generator

@@ -1,0 +1,5 @@
+grounding_config: 
+  box_threshold: 0.15
+  text_threshold: 0.15
+  text_prompt: "pcb . circuit. circuit board. electronic. motherboard" # . grain . mixture
+  background_prompt: ""
