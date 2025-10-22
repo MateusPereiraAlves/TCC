@@ -1,0 +1,7 @@
+grounding_config:
+  box_threshold: 0.25
+  text_threshold: 0.25
+  # Prompts em inglês
+  text_prompt: "cardboard box . box"
+  # O que ignorar (fundo, etc.)
+  background_prompt: "background . floor . ground"

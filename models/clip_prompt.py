@@ -36,6 +36,7 @@ obj_list = [
     "pcb3",
     "pcb4",
     "capsules",
+    "cardboard box", # <-- 1. ADICIONADO AQUI
 ]
 
 mvtec_obj_list = [
@@ -71,6 +72,14 @@ visa_obj_list = [
     "capsules",
 ]
 
+# --- INÍCIO DA ADIÇÃO 2 ---
+# Lista de objetos para seu novo dataset
+cardboard_box_obj_list = [
+    "cardboard box"
+]
+# --- FIM DA ADIÇÃO 2 ---
+
+
 mvtec_anomaly_detail = {
     "carpet": "different color,cut,hole,metal contamination,thread",
     "grid": "bent,broken,glue,metal contamination,thread",
@@ -104,6 +113,14 @@ visa_anomaly_detail = {
     "pipe fryum": "burnt,corner and edge breakage,different colour spot,middle breakage,small scratches,small cracks,similar colour spot,stuck together",
 }
 
+# --- INÍCIO DA ADIÇÃO 3 ---
+# Descrição das anomalias (em inglês) para sua classe
+cardboard_box_anomaly_detail = {
+    "cardboard box": "dented,crushed,torn,ripped,missing piece,stain,wet spot"
+}
+# --- FIM DA ADIÇÃO 3 ---
+
+
 prompt_normal = ['{}', 'flawless {}', 'perfect {}', 'unblemished {}', '{} without flaw', '{} without defect', '{} without damage']
 prompt_abnormal = ['damaged {}', 'broken {}', '{} with flaw', '{} with defect', '{} with damage']
 
@@ -114,12 +131,18 @@ for cls_name in mvtec_obj_list:
 for cls_name in visa_obj_list:
     prompt_abnormal_detail[cls_name] = prompt_abnormal + ['abnormal {} ' + 'with {}'.format(x) for x in visa_anomaly_detail[cls_name].split(',')]
 
+# --- INÍCIO DA ADIÇÃO 4 ---
+# Adiciona os prompts de anomalia detalhados para sua classe
+for cls_name in cardboard_box_obj_list:
+    prompt_abnormal_detail[cls_name] = prompt_abnormal + ['abnormal {} ' + 'with {}'.format(x) for x in cardboard_box_anomaly_detail[cls_name].split(',')]
+# --- FIM DA ADIÇÃO 4 ---
+
 
 def encode_text_with_prompt_ensemble(model, objs, tokenizer, device):
     prompt_normal = ['{}', 'flawless {}', 'perfect {}', 'unblemished {}', '{} without flaw', '{} without defect', '{} without damage']
     prompt_abnormal = ['damaged {}', 'broken {}', '{} with flaw', '{} with defect', '{} with damage']
     prompt_state = [prompt_normal, prompt_abnormal]
-    prompt_templates = ['a bad photo of a {}.', 'a low resolution photo of the {}.', 'a bad photo of the {}.', 'a cropped photo of the {}.', 'a bright photo of a {}.', 'a dark photo of the {}.', 'a photo of my {}.', 'a photo of the cool {}.', 'a close-up photo of a {}.', 'a black and white photo of the {}.', 'a bright photo of the {}.', 'a cropped photo of a {}.', 'a jpeg corrupted photo of a {}.', 'a blurry photo of the {}.', 'a photo of the {}.', 'a good photo of the {}.', 'a photo of one {}.', 'a close-up photo of the {}.', 'a photo of a {}.', 'a low resolution photo of a {}.', 'a photo of a large {}.', 'a blurry photo of a {}.', 'a jpeg corrupted photo of the {}.', 'a good photo of a {}.', 'a photo of the small {}.', 'a photo of the large {}.', 'a black and white photo of a {}.', 'a dark photo of a {}.', 'a photo of a cool {}.', 'a photo of a small {}.', 'there is a {} in the scene.', 'there is the {} in the scene.', 'this is a {} in the scene.', 'this is the {} in the scene.', 'this is one {} in the scene.']
+    prompt_templates = ['a bad photo of a {}.', 'a low resolution photo of the {}.', 'a bad photo of the {}.', 'a cropped photo of the {}.', 'a bright photo of a {}.', 'a dark photo of the {}.', 'a photo of my {}.', 'a photo of the cool {}.', 'a close-up photo of a {}.', 'a black and white photo of the {}.', 'a bright photo of the {}.', 'a cropped photo of a {}.', 'a jpeg corrupted photo of a {}.', 'a blurry photo of the {}.', 'a photo of the {}.', 'a good photo of the {}.', 'a photo of one {}.', 'a close-up photo of the {}.', 'a photo of a {}.', 'a low resolution photo of a {}.', 'a photo of a large {}.', 'a blurry photo of a {}.', 'a jpeg corrupted photo of the {}.', 'a good photo of a {}.', 'a photo of the small {}.', 'a photo of the large {}.', 'a black and white photo of a {}.', 'a dark photo of a {}.', 'a photo of a cool {}.', 'a photo of a small {}.', 'there is a {} in the scene.', 'there is the {} in thescene.', 'this is a {} in the scene.', 'this is the {} in the scene.', 'this is one {} in the scene.']
 
     text_prompts = {}
     for obj in objs:

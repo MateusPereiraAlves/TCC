@@ -1,0 +1,17 @@
+{
+  "train": {
+    "dataset_caixas": [
+      {"img_path": "train/good/000.png", "cls_name": "dataset_caixas", "specie_name": "good", "anomaly": 0},
+    ]
+  },
+  "test": {
+    "dataset_caixas": [
+      {"img_path": "test/good/000.png", "cls_name": "dataset_caixas", "specie_name": "good", "anomaly": 0},
+      {"img_path": "test/good/001.png", "cls_name": "dataset_caixas", "specie_name": "good", "anomaly": 0},
+      {"img_path": "test/rasgo/000.png", "cls_name": "dataset_caixas", "specie_name": "rasgo", "anomaly": 1},
+      {"img_path": "test/rasgo/001.png", "cls_name": "dataset_caixas", "specie_name": "rasgo", "anomaly": 1},
+      {"img_path": "test/amassado/000.png", "cls_name": "dataset_caixas", "specie_name": "amassado", "anomaly": 1},
+      {"img_path": "test/amassado/001.png", "cls_name": "dataset_caixas", "specie_name": "amassado", "anomaly": 1}
+    ]
+  }
+}
