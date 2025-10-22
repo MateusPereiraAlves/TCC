@@ -139,8 +139,47 @@ for cls_name in cardboard_box_obj_list:
 
 
 def encode_text_with_prompt_ensemble(model, objs, tokenizer, device):
-    prompt_normal = ['{}', 'flawless {}', 'perfect {}', 'unblemished {}', '{} without flaw', '{} without defect', '{} without damage']
-    prompt_abnormal = ['damaged {}', 'broken {}', '{} with flaw', '{} with defect', '{} with damage']
+    prompt_normal = [
+    '{}', 
+    'flawless {}', 
+    'perfect {}', 
+    'unblemished {}', 
+    '{} without flaw', 
+    '{} without defect', 
+    '{} without damage',
+    'intact {}',
+    'new {}',
+    'good {}',
+    '{} with logo',        # Chave para ignorar logos
+    '{} with printing',    # Chave para ignorar logos
+    'printed {}'          # Chave para ignorar logos
+]
+    prompt_abnormal = [
+    'damaged {}', 
+    'broken {}', 
+    '{} with flaw', 
+    '{} with defect',
+    
+    # Específicos para "pedaços faltando"
+    'torn {}',
+    '{} with a hole',
+    '{} with a missing piece',
+    '{} with a torn edge',
+
+    # Específicos para "falhas na colagem"
+    '{} with a bad seam',
+    'poorly glued {}',
+    '{} with a detached seam',
+    '{} with gluing failure',
+
+    # Específicos para "machucados" e "ondulações"
+    'dented {}',
+    'crushed {}',
+    'scratched {}',
+    '{} with surface damage',
+    '{} with visible corrugation', # Para o problema do "ziper" / ondulações
+    'wavy {}'
+]
     prompt_state = [prompt_normal, prompt_abnormal]
     prompt_templates = ['a bad photo of a {}.', 'a low resolution photo of the {}.', 'a bad photo of the {}.', 'a cropped photo of the {}.', 'a bright photo of a {}.', 'a dark photo of the {}.', 'a photo of my {}.', 'a photo of the cool {}.', 'a close-up photo of a {}.', 'a black and white photo of the {}.', 'a bright photo of the {}.', 'a cropped photo of a {}.', 'a jpeg corrupted photo of a {}.', 'a blurry photo of the {}.', 'a photo of the {}.', 'a good photo of the {}.', 'a photo of one {}.', 'a close-up photo of the {}.', 'a photo of a {}.', 'a low resolution photo of a {}.', 'a photo of a large {}.', 'a blurry photo of a {}.', 'a jpeg corrupted photo of the {}.', 'a good photo of a {}.', 'a photo of the small {}.', 'a photo of the large {}.', 'a black and white photo of a {}.', 'a dark photo of a {}.', 'a photo of a cool {}.', 'a photo of a small {}.', 'there is a {} in the scene.', 'there is the {} in thescene.', 'this is a {} in the scene.', 'this is the {} in the scene.', 'this is one {} in the scene.']
 
