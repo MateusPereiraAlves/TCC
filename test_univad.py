@@ -109,7 +109,7 @@ if __name__ == "__main__":
     parser.add_argument("--class_name", type=str, default="None", help="Filtra classe")
     parser.add_argument("--device", type=str, default="cuda", help="device")
     parser.add_argument("--config_path_base", type=str, default="./configs/class_histogram", help="Caminho base .yaml")
-    parser.add_argument("--anomaly_threshold", type=float, default=0.5, help="Threshold para classificar scores > threshold como 'Bad'")
+    parser.add_argument("--anomaly_threshold", type=float, default=1.10, help="Threshold para classificar scores > threshold como 'Bad'")
     parser.add_argument("--seed", type=int, default=42, help="Seed para reprodutibilidade do shuffle")
     args = parser.parse_args()
 
