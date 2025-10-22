@@ -139,47 +139,57 @@ for cls_name in cardboard_box_obj_list:
 
 
 def encode_text_with_prompt_ensemble(model, objs, tokenizer, device):
+    # Prompts para "Normal" (Caixa Boa)
+    # Focados em integridade física E em normalizar variações de impressão/tamanho
     prompt_normal = [
-    '{}', 
-    'flawless {}', 
-    'perfect {}', 
-    'unblemished {}', 
-    '{} without flaw', 
-    '{} without defect', 
-    '{} without damage',
-    'intact {}',
-    'new {}',
-    'good {}',
-    '{} with logo',        # Chave para ignorar logos
-    '{} with printing',    # Chave para ignorar logos
-    'printed {}'          # Chave para ignorar logos
-]
+        'an intact {}',
+        'a structurally sound {}',
+        'a {} in good condition, regardless of size',
+        'a perfect {} with printing or a logo on it',
+        'a large, undamaged {}',
+        'a small, intact {}',
+        'a plain {} with no printing',
+        'a flawless {} with text printed on it',
+        'a {} with no physical damage'
+    ]
+
+    # Prompts para "Anormal" (Caixa Ruim)
+    # Focados nos defeitos físicos específicos
     prompt_abnormal = [
-    'damaged {}', 
-    'broken {}', 
-    '{} with flaw', 
-    '{} with defect',
-    
-    # Específicos para "pedaços faltando"
-    'torn {}',
-    '{} with a hole',
-    '{} with a missing piece',
-    '{} with a torn edge',
-
-    # Específicos para "falhas na colagem"
-    '{} with a bad seam',
-    'poorly glued {}',
-    '{} with a detached seam',
-    '{} with gluing failure',
-
-    # Específicos para "machucados" e "ondulações"
-    'dented {}',
-    'crushed {}',
-    'scratched {}',
-    '{} with surface damage',
-    '{} with visible corrugation', # Para o problema do "ziper" / ondulações
-    'wavy {}'
-]
+        # Amassada / Deformada
+        'a dented {}',         # amassada
+        'a crushed {}',        # esmagada
+        'a bent {}',           # torta
+        'a deformed {}',       # deformada
+        'a crumpled {}',       # amarrotada
+        'a {} with a caved-in side',
+        'a {} that is creased', # com vinco forte
+        'a warped {}',         # empenada
+        
+        # Rasgada / Cortada
+        'a torn {}',           # rasgada
+        'a ripped {}',         # rasgada
+        'a {} with a tear in it',
+        'a {} with a gash in it', # corte profundo
+        'a {} with frayed edges',
+        
+        # Riscada / Marcas
+        'a scratched {}',      # riscada
+        'a scuffed {}',        # arranhada (leve)
+        'a scraped {}',        # raspada
+        'a {} with scratches on the surface',
+        'a {} with markings or writing on it', # riscada (caneta)
+        
+        # Furos / "Mordidas"
+        'a {} with a gouge in it', # "mordida"
+        'a {} with a hole in it',
+        'a punctured {}',      # perfurada
+        
+        # Defeitos Gerais
+        'a damaged {}',
+        'a broken {}',
+        'a defective {}'
+    ]
     prompt_state = [prompt_normal, prompt_abnormal]
     prompt_templates = ['a bad photo of a {}.', 'a low resolution photo of the {}.', 'a bad photo of the {}.', 'a cropped photo of the {}.', 'a bright photo of a {}.', 'a dark photo of the {}.', 'a photo of my {}.', 'a photo of the cool {}.', 'a close-up photo of a {}.', 'a black and white photo of the {}.', 'a bright photo of the {}.', 'a cropped photo of a {}.', 'a jpeg corrupted photo of a {}.', 'a blurry photo of the {}.', 'a photo of the {}.', 'a good photo of the {}.', 'a photo of one {}.', 'a close-up photo of the {}.', 'a photo of a {}.', 'a low resolution photo of a {}.', 'a photo of a large {}.', 'a blurry photo of a {}.', 'a jpeg corrupted photo of the {}.', 'a good photo of a {}.', 'a photo of the small {}.', 'a photo of the large {}.', 'a black and white photo of a {}.', 'a dark photo of a {}.', 'a photo of a cool {}.', 'a photo of a small {}.', 'there is a {} in the scene.', 'there is the {} in thescene.', 'this is a {} in the scene.', 'this is the {} in the scene.', 'this is one {} in the scene.']
 
