@@ -89,7 +89,7 @@ class SegmentationHandler:
 
         GROUNDING_DINO_CONFIG_PATH = './models/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py'
         GROUNDING_DINO_CHECKPOINT_PATH = './pretrained_ckpts/groundingdino_swint_ogc.pth'
-        SAM_CHECKPOINT_PATH = './pretrained_ckpts/sam_vit_b.pth'
+        SAM_CHECKPOINT_PATH = './pretrained_ckpts/sam_hq_vit_h.pth'
         
         for path in [GROUNDING_DINO_CONFIG_PATH, GROUNDING_DINO_CHECKPOINT_PATH, SAM_CHECKPOINT_PATH]:
             if not os.path.exists(path): raise FileNotFoundError(f"Arquivo de modelo não encontrado: {path}.")
@@ -97,23 +97,68 @@ class SegmentationHandler:
         print("Carregando modelo GroundingDINO na VRAM...")
         self.grounding_dino_model = gs_load_model(GROUNDING_DINO_CONFIG_PATH, GROUNDING_DINO_CHECKPOINT_PATH, self.device)
         print("Carregando modelo Segment Anything (SAM) na VRAM...")
-        sam = sam_hq_model_registry['vit_b'](SAM_CHECKPOINT_PATH).to(self.device)
+        sam = sam_hq_model_registry['vit_h'](SAM_CHECKPOINT_PATH).to(self.device)
         self.sam_predictor = SamPredictor(sam)
         print("Modelos de segmentação prontos para uso.")
 
-    def segment(self, image_paths, save_path, config):
+    def segment(self, image_paths, save_path, config, find_only_one_object=False):
         if self.grounding_dino_model is None or self.sam_predictor is None:
             raise RuntimeError("Modelos não carregados. Chame `load_models()` primeiro.")
 
-        box_threshold = config['box_threshold']; text_threshold = config['text_threshold']; text_prompt = config['text_prompt']
+        # --- LÓGICA DE RETRY (3 TENTATIVAS) ---
+        initial_box_thresh = config['box_threshold']
+        initial_text_thresh = config['text_threshold']
+        text_prompt = config['text_prompt']
+
+        NUM_ATTEMPTS = 3  # 1 tentativa inicial + 2 retries
+        RETRY_STEP = 0.1  # Quanto "afrouxar" a cada tentativa
+        MIN_THRESH = 0.15 # Limite mínimo para não afrouxar demais
+        # --- FIM DA LÓGICA DE RETRY ---
 
         for image_path in tqdm(image_paths, desc="Gerando Máscaras (rápido)"):
             try:
                 image_pil, image_tensor = load_image(image_path)
                 
-                boxes_filt, pred_phrases = get_grounding_output(
-                    self.grounding_dino_model, image_tensor, text_prompt, box_threshold, text_threshold, device=self.device
-                )
+                # Inicializa os thresholds atuais e os tensores de resultado
+                current_box_thresh = initial_box_thresh
+                current_text_thresh = initial_text_thresh
+                boxes_filt = torch.empty(0).to(self.device) # Começa com um tensor vazio
+                pred_phrases = []
+
+                # --- LÓGICA DE RETRY: Loop de 3 Tentativas ---
+                for attempt in range(NUM_ATTEMPTS):
+                    print(f"  -> Segmentação: Tentativa {attempt + 1}/{NUM_ATTEMPTS} (Box Th: {current_box_thresh:.2f}, Text Th: {current_text_thresh:.2f})...")
+                    
+                    boxes_filt, pred_phrases = get_grounding_output(
+                        self.grounding_dino_model, image_tensor, text_prompt, 
+                        current_box_thresh, current_text_thresh, device=self.device
+                    )
+
+                    # Se encontrou algo, sucesso! Sair do loop.
+                    if boxes_filt.size(0) > 0:
+                        print(f"  -> Sucesso na Tentativa {attempt + 1}.")
+                        break
+                    
+                    # Se não encontrou, preparar para a próxima tentativa (se houver)
+                    if attempt < NUM_ATTEMPTS - 1: # Se não for a última tentativa
+                        print(f"  -> Tentativa {attempt + 1} falhou. Afrouxando thresholds...")
+                        
+                        # Calcula os novos thresholds, respeitando o mínimo
+                        current_box_thresh = max(MIN_THRESH, current_box_thresh - RETRY_STEP)
+                        current_text_thresh = max(MIN_THRESH, current_text_thresh - RETRY_STEP)
+                        
+                        # Se ambos os thresholds atingiram o mínimo, não adianta tentar de novo.
+                        if current_box_thresh == MIN_THRESH and current_text_thresh == MIN_THRESH:
+                            print(f"  -> Thresholds no mínimo ({MIN_THRESH}). Parando as tentativas.")
+                            break
+                    
+                # --- FIM DO LOOP DE RETRY ---
+
+                # Aplicar o filtro Top-1 DEPOIS de ter os boxes (da tentativa bem-sucedida)
+                if find_only_one_object and boxes_filt.size(0) > 0:
+                    print(f"  -> AVISO: Limitando a 1 objeto (de {boxes_filt.size(0)} encontrados).")
+                    boxes_filt = boxes_filt[0:1]
+                    pred_phrases = [pred_phrases[0]]
 
                 image_source = cv2.imread(image_path)
                 image_source = cv2.cvtColor(image_source, cv2.COLOR_BGR2RGB)
@@ -121,59 +166,57 @@ class SegmentationHandler:
 
                 H, W = image_pil.size[1], image_pil.size[0]
                 
-                # Coordenadas de Bounding Box (lógica original)
-                boxes_filt_scaled = boxes_filt.clone() # Usar clone para não modificar o tensor original
+                boxes_filt_scaled = boxes_filt.clone()
                 for i in range(boxes_filt_scaled.size(0)):
                     boxes_filt_scaled[i] = boxes_filt_scaled[i] * torch.Tensor([W, H, W, H])
                     boxes_filt_scaled[i][:2] -= boxes_filt_scaled[i][2:] / 2
                     boxes_filt_scaled[i][2:] += boxes_filt_scaled[i][:2]
                 boxes_filt_cpu = boxes_filt_scaled.cpu()
 
+                # --- Lógica de Segurança (para UnboundLocalError) ---
+                # Se mesmo após todas as tentativas não achou nada, cria máscaras vazias.
                 if len(boxes_filt_cpu) == 0:
-                    final_masks = np.ones((W, H)) # O original usava W,H, troquei para H,W para consistência
+                    print(f"  -> AVISO: Nenhum objeto encontrado em {os.path.basename(image_path)} (após {NUM_ATTEMPTS} tentativas).")
+                    final_masks = np.zeros((H, W), dtype=np.uint8) 
                     background = np.zeros((H,W), dtype=np.uint8)
                     color_mask = np.zeros((H,W,3), dtype=np.uint8)
+                
                 else:
+                    # Objetos foram encontrados, processar normalmente.
                     transformed_boxes = self.sam_predictor.transform.apply_boxes_torch(boxes_filt_cpu, image_source.shape[:2]).to(self.device)
+                    
                     masks_tensor, _, _ = self.sam_predictor.predict_torch(
                         point_coords=None, point_labels=None, boxes=transformed_boxes, multimask_output=False,
                     )
 
-                background_indices = [i for i, text in enumerate(pred_phrases) if any(j in text.replace(' - ','-') for j in config.get('background_prompt', '').split('.') if j.strip())]
-                
-                if background_indices:
-                    background_tensor = torch.stack([masks_tensor[i] for i in background_indices])
-                    background = (torch.sum(background_tensor, dim=0).squeeze().cpu().numpy() > 0).astype(np.uint8) * 255
-                else:
-                    # Lógica de fallback do original se não houver background
-                    if masks_tensor.nelement() > 0:
-                        background = np.zeros_like(masks_tensor[0][0].cpu().numpy()).astype(np.uint8)
+                    background_indices = [i for i, text in enumerate(pred_phrases) if any(j in text.replace(' - ','-') for j in config.get('background_prompt', '').split('.') if j.strip())]
+                    
+                    if background_indices:
+                        background_tensor = torch.stack([masks_tensor[i] for i in background_indices])
+                        background = (torch.sum(background_tensor, dim=0).squeeze().cpu().numpy() > 0).astype(np.uint8) * 255
                     else:
-                        background = np.zeros((H,W), dtype=np.uint8)
+                        if masks_tensor.nelement() > 0:
+                            background = np.zeros_like(masks_tensor[0][0].cpu().numpy()).astype(np.uint8)
+                        else:
+                            background = np.zeros((H,W), dtype=np.uint8)
 
+                    foreground_indices = [i for i in range(len(masks_tensor)) if i not in background_indices]
+                    if foreground_indices:
+                        foreground_tensor = torch.stack([masks_tensor[i] for i in foreground_indices])
+                        
+                        masks_np = turn_binary_to_int(foreground_tensor[:,0,:,:].cpu().numpy())
+                        
+                        if config.get('filter_by_combine', False) and 'filter_by_combine' in globals():
+                            masks_np = filter_by_combine(masks_np)
 
-                foreground_indices = [i for i in range(len(masks_tensor)) if i not in background_indices]
-                if foreground_indices:
-                    foreground_tensor = torch.stack([masks_tensor[i] for i in foreground_indices])
-                    
-                    # --- INÍCIO DA CORREÇÃO PRINCIPAL ---
-                    # Replicando a lógica exata do seu script original
-                    masks_np = turn_binary_to_int(foreground_tensor[:,0,:,:].cpu().numpy())
-                    
-                    # A chamada 'filter_by_combine' estava faltando e pode ser importante
-                    if config.get('filter_by_combine', False):
-                        # Nota: a função filter_by_combine não foi fornecida, se for necessária, precisa ser adicionada.
-                        # Por enquanto, vamos pular, pois não estava no seu trecho de código.
-                        pass
+                        color_mask = color_masks(list(masks_np))
+                        final_masks = merge_masks(list(masks_np))
+                    else:
+                        final_masks = np.zeros((H, W), dtype=np.uint8)
+                        color_mask = np.zeros((H, W, 3), dtype=np.uint8)
+                # --- FIM da Lógica de Segurança ---
 
-                    color_mask = color_masks(list(masks_np)) # Passa uma lista de arrays 2D
-                    final_masks = merge_masks(list(masks_np))
-                    # --- FIM DA CORREÇÃO PRINCIPAL ---
-                else:
-                    final_masks = np.zeros((H, W), dtype=np.uint8)
-                    color_mask = np.zeros((H, W, 3), dtype=np.uint8)
-                
-                # Lógica de salvamento original
+                # Lógica de salvamento
                 image_name_slug = '/'.join((image_path.split(".")[-2]).split("/")[-3:])
                 output_dir = os.path.join(save_path, image_name_slug)
                 os.makedirs(output_dir, exist_ok=True)
@@ -392,96 +435,6 @@ def filter_by_combine(masks):
                 combine_masks = np.logical_or(combine_masks,mask)
                 result_masks.append(mask)
     return result_masks
-
-def grounding_segmentation(img_paths,save_path,config):
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    box_threshold = config['box_threshold']
-    text_threshold = config['text_threshold']
-    text_prompt = config['text_prompt']
-
-    model = load_model('./models/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py',
-                       './pretrained_ckpts/groundingdino_swint_ogc.pth',"cuda")
-    sam = sam_hq_model_registry['vit_h']('./pretrained_ckpts/sam_hq_vit_h.pth').to(device)
-    predictor = SamPredictor(sam)
-
-    for image_path in tqdm.tqdm(img_paths,desc="grounding..."):
-        image_pil, image = load_image(image_path)
-        boxes_filt, pred_phrases = get_grounding_output(
-            model, image, text_prompt, box_threshold, text_threshold, device="cuda"
-        )
-
-        background_box = list()
-        for i,text in enumerate(pred_phrases):
-            for j in config['background_prompt'].split('.'):
-                if j in text.replace(' - ','-') and j != ' ' and j != '':
-                    background_box.append(i)
-
-        image = cv2.imread(image_path)
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        predictor.set_image(image)
-
-        size = image_pil.size
-        H, W = size[1], size[0]
-        for i in range(boxes_filt.size(0)):
-            boxes_filt[i] = boxes_filt[i] * torch.Tensor([W, H, W, H])
-            boxes_filt[i][:2] -= boxes_filt[i][2:] / 2
-            boxes_filt[i][2:] += boxes_filt[i][:2]
-
-        boxes_filt = boxes_filt.cpu()
-
-        if len(boxes_filt) == 0:
-            masks = np.ones((W, H))
-        else:
-            transformed_boxes = predictor.transform.apply_boxes_torch(boxes_filt, image.shape[:2]).to(device)
-    
-            masks, _, _ = predictor.predict_torch(
-                point_coords = None,
-                point_labels = None,
-                boxes = transformed_boxes.to(device),
-                multimask_output = False,
-            )
-    
-    
-            if len(background_box) != 0:
-                backgrounds = torch.stack([masks[i] for i in background_box])
-                background = torch.sum(backgrounds,dim=0).squeeze().cpu().numpy()
-                background = np.where(background!=0,255,0).astype(np.uint8)
-            else:
-                background = np.zeros_like(masks[0][0].cpu().numpy()).astype(np.uint8)
-    
-            masks = torch.stack([masks[i] for i in range(len(masks)) if i not in background_box])
-            masks = turn_binary_to_int(masks[:,0,:,:].cpu().numpy())
-            if config.get('filter_by_combine',False):
-                masks = filter_by_combine(masks)
-            color_mask = color_masks(masks)
-            masks = merge_masks(masks)
-        image_name = '/'.join((image_path.split(".")[-2]).split("/")[-3:])
-        os.makedirs(f"{save_path}/{image_name}",exist_ok=True)
-        cv2.imwrite(f"{save_path}/{image_name}/grounding_mask.png",masks)
-        cv2.imwrite(f"{save_path}/{image_name}/grounding_background.png",background)
-        cv2.imwrite(f"{save_path}/{image_name}/grounding_mask_color.png",color_mask)
-
-
-def segmentation(img_paths,save_path,use_grounding_filter=False,no_sam=True):
-    for p in tqdm.tqdm(img_paths,desc="segmentation..."):
-        image_name = '/'.join((p.split(".")[0]).split("/")[-3:])
-        print(image_name)
-        refined_masks = cv2.imread(f"{save_path}/{image_name}/grounding_mask.png",cv2.IMREAD_GRAYSCALE)
-        refined_masks = split_masks_from_one_mask(refined_masks)
-        if len(refined_masks) > 0:
-            refined_masks = split_masks_by_connected_component(refined_masks)
-        if len(refined_masks) > 0:
-            refined_masks = filter_by_combine(refined_masks)
-        refined_masks_color = color_masks(refined_masks)
-        if len(refined_masks) > 0:
-            refined_masks = merge_masks(refined_masks)
-        # cv2.imwrite(f"{save_path}/{image_name}/all_masks.png",merge_masks(raw_splited_masks))
-        # cv2.imwrite(f"{save_path}/{image_name}/all_masks_color.png",color_masks(raw_splited_masks))
-        cv2.imwrite(f"{save_path}/{image_name}/refined_masks.png",refined_masks)
-        cv2.imwrite(f"{save_path}/{image_name}/refined_masks_color.png",refined_masks_color)
-
-
 
 color_list = [[127, 123, 229], [195, 240, 251], [120, 200, 255],
                [243, 241, 230], [224, 190, 144], [178, 116, 75],
