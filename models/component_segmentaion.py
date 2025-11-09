@@ -2,7 +2,8 @@ import numpy as np
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-# segment anything
+# Adicione esta linha:
+from .GroundingDINO.groundingdino.datasets import transforms as T# segment anything
 from .segment_anything import (
     sam_model_registry,
     sam_hq_model_registry,
@@ -27,7 +28,7 @@ import sklearn.cluster
 
 import scipy.stats
 import torch
-from PIL import Image
+from PIL import Image, ImageOps
 import yaml
 import time
 
@@ -89,7 +90,7 @@ class SegmentationHandler:
 
         GROUNDING_DINO_CONFIG_PATH = './models/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py'
         GROUNDING_DINO_CHECKPOINT_PATH = './pretrained_ckpts/groundingdino_swint_ogc.pth'
-        SAM_CHECKPOINT_PATH = './pretrained_ckpts/sam_hq_vit_h.pth'
+        SAM_CHECKPOINT_PATH = './pretrained_ckpts/sam_vit_b.pth'
         
         for path in [GROUNDING_DINO_CONFIG_PATH, GROUNDING_DINO_CHECKPOINT_PATH, SAM_CHECKPOINT_PATH]:
             if not os.path.exists(path): raise FileNotFoundError(f"Arquivo de modelo não encontrado: {path}.")
@@ -97,7 +98,27 @@ class SegmentationHandler:
         print("Carregando modelo GroundingDINO na VRAM...")
         self.grounding_dino_model = gs_load_model(GROUNDING_DINO_CONFIG_PATH, GROUNDING_DINO_CHECKPOINT_PATH, self.device)
         print("Carregando modelo Segment Anything (SAM) na VRAM...")
-        sam = sam_hq_model_registry['vit_h'](SAM_CHECKPOINT_PATH).to(self.device)
+        # --- CORRIGIDO: Bloco lógico para carregar SAM Base/Large ou SAM-HQ ---
+        # Extrai o nome do arquivo, ex: "sam_vit_l.pth" ou "sam_hq_vit_h.pth"
+        checkpoint_filename = os.path.basename(SAM_CHECKPOINT_PATH)
+        
+        # Extrai o nome base, ex: "sam_vit_l" ou "sam_hq_vit_h"
+        base_name = checkpoint_filename.split('.')[0]
+
+        # Verifica se o checkpoint é um modelo 'hq'
+        if 'hq' in checkpoint_filename:
+            print(f"Carregando modelo Segment Anything (SAM-HQ) na VRAM: {checkpoint_filename}")
+            # Extrai a chave do modelo, ex: 'vit_h' de 'sam_hq_vit_h'
+            model_key = base_name.replace('sam_hq_', '')
+            sam = sam_hq_model_registry[model_key](SAM_CHECKPOINT_PATH).to(self.device)
+        else:
+            print(f"Carregando modelo Segment Anything (SAM-Base/Large) na VRAM: {checkpoint_filename}")
+            # Extrai a chave do modelo, ex: 'vit_l' de 'sam_vit_l' ou 'vit_b' de 'sam_vit_b'
+            model_key = base_name.replace('sam_', '')
+            sam = sam_model_registry[model_key](SAM_CHECKPOINT_PATH).to(self.device)
+        
+        # self.sam_predictor = SamPredictor(sam) # Esta linha já deve existir logo abaixo
+        # --- Fim do Bloco Corrigido ---
         self.sam_predictor = SamPredictor(sam)
         print("Modelos de segmentação prontos para uso.")
 
@@ -117,8 +138,35 @@ class SegmentationHandler:
 
         for image_path in tqdm(image_paths, desc="Gerando Máscaras (rápido)"):
             try:
-                image_pil, image_tensor = load_image(image_path)
+                # --- INÍCIO: CARREGAMENTO UNIFICADO E CORRIGIDO ---
                 
+                # 1. Carregar com PIL e corrigir orientação EXIF
+                pil_image_raw = Image.open(image_path)
+                image_pil = ImageOps.exif_transpose(pil_image_raw).convert("RGB")
+                
+                # 2. Criar 'image_source' (formato numpy H, W, C) para o SAM
+                image_source = np.array(image_pil) 
+                
+                # 3. Criar 'image_tensor' (formato tensor) para GroundingDINO
+                #    Replicando a transformação EXATA do grounded_sam.py original
+                transform_g = T.Compose(
+                    [
+                        T.RandomResize([800], max_size=1333),
+                        T.ToTensor(),
+                        T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+                    ]
+                )
+                
+                # A transformação T do GroundingDINO espera (imagem, alvo) e retorna (imagem, alvo)
+                # Passamos 'None' como o alvo, como o código original fazia.
+                image_tensor, _ = transform_g(image_pil, None) 
+                image_tensor = image_tensor.to(self.device) # Tensor 3D [C, H_redimensionada, W_redimensionada]
+                
+                # 4. Definir H, W a partir da imagem corrigida
+                H, W = image_source.shape[0], image_source.shape[1]
+                
+                # --- FIM: CARREGAMENTO UNIFICADO E CORRIGIDO ---
+
                 # Inicializa os thresholds atuais e os tensores de resultado
                 current_box_thresh = initial_box_thresh
                 current_text_thresh = initial_text_thresh
@@ -129,6 +177,7 @@ class SegmentationHandler:
                 for attempt in range(NUM_ATTEMPTS):
                     print(f"  -> Segmentação: Tentativa {attempt + 1}/{NUM_ATTEMPTS} (Box Th: {current_box_thresh:.2f}, Text Th: {current_text_thresh:.2f})...")
                     
+                    # Usa o 'image_tensor' corrigido
                     boxes_filt, pred_phrases = get_grounding_output(
                         self.grounding_dino_model, image_tensor, text_prompt, 
                         current_box_thresh, current_text_thresh, device=self.device
@@ -160,11 +209,14 @@ class SegmentationHandler:
                     boxes_filt = boxes_filt[0:1]
                     pred_phrases = [pred_phrases[0]]
 
-                image_source = cv2.imread(image_path)
-                image_source = cv2.cvtColor(image_source, cv2.COLOR_BGR2RGB)
-                self.sam_predictor.set_image(image_source)
+                # Aplicar o filtro Top-1 DEPOIS de ter os boxes (da tentativa bem-sucedida)
+                if find_only_one_object and boxes_filt.size(0) > 0:
+                    print(f"  -> AVISO: Limitando a 1 objeto (de {boxes_filt.size(0)} encontrados).")
+                    boxes_filt = boxes_filt[0:1]
+                    pred_phrases = [pred_phrases[0]]
 
-                H, W = image_pil.size[1], image_pil.size[0]
+                # Define a imagem no SAM (agora usando 'image_source' corrigido)
+                self.sam_predictor.set_image(image_source)
                 
                 boxes_filt_scaled = boxes_filt.clone()
                 for i in range(boxes_filt_scaled.size(0)):
