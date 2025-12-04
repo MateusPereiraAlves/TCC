@@ -18,6 +18,7 @@ from utils.sampler import GreedyCoresetSampler
 from utils.crf import dense_crf
 import models.clip as open_clip
 import os
+import gc
 
 from models.component_feature_extractor import ComponentFeatureExtractor
 from models.component_segmentaion import (
@@ -90,20 +91,40 @@ class UniVAD(nn.Module):
         pretrained = "openai"
         device = torch.device("cuda")
         self.out_layers = [6, 12, 18, 24]
-
-        self.clip_model, _, self.preprocess = open_clip.create_model_and_transforms(
-            clip_name, self.image_size, pretrained=pretrained
-        )  # CLIP
-
-        self.dino_net = None # Apenas inicializa, não carrega o modelo
+        
+        # 1. Carrega o modelo MAIS PESADO (DINOv2-G) primeiro
+        print("Carregando DINOv2-G...")
         self.dinov2_net = torch.hub.load(
             'facebookresearch/dinov2:main', 'dinov2_vitl14', pretrained=True
-        ).to(device)
-
-        self.cfa = CFA()
-
+        )
+        # 2. Move-o para a GPU IMEDIATAMENTE
+        self.dinov2_net.to(device)
+        print("DINOv2-G carregado e movido para a GPU.")
+        
+        # 3. Força a limpeza da memória RAM
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            
+        # 4. Agora carrega o segundo modelo (CLIP-L) usando o método padrão da biblioteca
+        print("Carregando CLIP-L (via internet)...")
+        self.clip_model, _, self.preprocess = open_clip.create_model_and_transforms(
+            clip_name, 
+            self.image_size, 
+            pretrained="openai" #
+        )
         self.clip_model.to(device)
+        print("CLIP-L carregado e movido para a GPU.")
+
+        # 5. Limpa a memória novamente por segurança
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            
+        self.dino_net = None 
+        self.cfa = CFA()
         self.clip_model.eval()
+
 
         self.tokenizer = open_clip.get_tokenizer(clip_name)
         self.device = device
@@ -172,24 +193,19 @@ class UniVAD(nn.Module):
         if not os.path.exists(base_path):
             os.makedirs(base_path)
             
-        # Garante que o tensor está na CPU e é um numpy array
         heatmap_np = heatmap_tensor.squeeze().detach().cpu().numpy()
         
-        # Normaliza o mapa de calor para o intervalo 0-255
         normalized_map = (heatmap_np - np.min(heatmap_np)) / (np.max(heatmap_np) - np.min(heatmap_np) + 1e-8)
         heatmap_uint8 = (normalized_map * 255).astype(np.uint8)
         
-        # Aplica um colormap para visualização
         colored_map = cv2.applyColorMap(heatmap_uint8, cv2.COLORMAP_JET)
         
-        # Salva a imagem
         cv2.imwrite(os.path.join(base_path, filename), colored_map)
 
     def forward(
         self, batch: torch.Tensor, image_path, image_pil=None, debug=False
     ) -> dict[str, torch.Tensor]:
 
-        # --- INÍCIO: Lógica do Debug ---
         debug_scores = {}
         debug_save_path = None
         if debug:
@@ -198,7 +214,6 @@ class UniVAD(nn.Module):
             debug_save_path = os.path.join("./results/debug", self.class_name, image_name)
             if not os.path.exists(debug_save_path):
                 os.makedirs(debug_save_path)
-        # --- FIM: Lógica do Debug ---
 
         clip_transformed_image = self.transform_clip(batch)
         dino_transformed_image = self.transform_dino(batch)
@@ -218,7 +233,6 @@ class UniVAD(nn.Module):
         global_score = (1 - (image_features @ self.normal_image_features.transpose(-2, -1)).max().item())
         if debug: debug_scores['global_score (image-level)'] = global_score
 
-        # ... (cálculo de anomaly_map_ret) ...
         sims = []
         for i in range(len(patch_tokens)):
             if i % 2 == 0: continue
@@ -235,7 +249,6 @@ class UniVAD(nn.Module):
             debug_scores['anomaly_map_ret (clip_global_patch_sim)_max'] = anomaly_map_ret.max().item()
             self._save_debug_heatmap(anomaly_map_ret, debug_save_path, "1_heatmap_clip_global_patch_sim.png")
 
-        # ... (cálculo de anomaly_map_ret_dino) ...
         dino_patch_tokens_reshaped = dino_patch_tokens.view(-1, 1, 1024)
         dino_normal_tokens_reshaped = self.normal_dino_patches.reshape(1, -1, 1024)
         cosine_similarity_matrix = F.cosine_similarity(dino_patch_tokens_reshaped, dino_normal_tokens_reshaped, dim=2)
@@ -248,7 +261,6 @@ class UniVAD(nn.Module):
             debug_scores['anomaly_map_ret_dino (dino_global_patch_sim)_max'] = anomaly_map_ret_dino.max().item()
             self._save_debug_heatmap(anomaly_map_ret_dino, debug_save_path, "2_heatmap_dino_global_patch_sim.png")
 
-        # ... (cálculo de anomaly_map_vls) ...
         anomaly_map_vls = []
         for layer in range(len(patch_tokens)):
             if layer != 6: continue
@@ -266,7 +278,6 @@ class UniVAD(nn.Module):
             debug_scores['anomaly_map_vls (clip_text_sim)_max'] = anomaly_map_vls.max().item()
             self._save_debug_heatmap(anomaly_map_vls, debug_save_path, "3_heatmap_clip_text_sim.png")
 
-        # ... (Resto do código do forward, com adições de debug) ...
         if self.gate == object_type.TEXTURE:
             anomaly_map_ret_all = (anomaly_map_ret + anomaly_map_ret_dino + anomaly_map_vls) / 3
             if debug:
@@ -690,13 +701,11 @@ class UniVAD(nn.Module):
                 )
 
         if self.gate == object_type.MULTI:
-            # --- INÍCIO DA ADIÇÃO ---
             if self.dino_net is None:
                 from modules import DinoFeaturizer
                 # Carrega o DinoFeaturizer somente se for necessário
                 print("Carregando DinoFeaturizer para o modo MULTI...")
                 self.dino_net = DinoFeaturizer()
-            # --- FIM DA ADIÇÃO ---
             if re_seg:
                 train_feature_list = []
                 greedsampler_perimg = GreedyCoresetSampler(

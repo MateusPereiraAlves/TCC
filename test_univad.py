@@ -24,12 +24,12 @@ class DataLoaderX(torch.utils.data.DataLoader):
     def __iter__(self):
         return BackgroundGenerator(super().__iter__())
 
-# --- Funções auxiliares ---
+# Funções auxiliares 
 def resize_tokens(x): B, N, C = x.shape; x = x.view(B, int(math.sqrt(N)), int(math.sqrt(N)), C); return x
 def read_config(config_path):
     with open(config_path, "r") as f: config = yaml.load(f, Loader=yaml.SafeLoader); return config
 
-# --- Função para cálculo do score Top- ---
+# Função para cálculo do score Top-K
 def calculate_top_k_score(anomaly_map, top_k_percent, mask=None):
     if mask is not None and np.any(mask):
         pixels = anomaly_map[mask]
@@ -67,7 +67,7 @@ def cal_score(obj):
     table_ls.append(table); auroc_sp_ls.append(auroc_sp); auroc_px_ls.append(auroc_px)
 
 if __name__ == "__main__":
-    # --- Parser de argumento ---
+    # --- Parser de argumentos--- 
     parser = argparse.ArgumentParser("Test Sequencial UniVAD com Classificação", add_help=True)
     parser.add_argument("--image_size", type=int, default=224, help="image size")
     parser.add_argument("--k_shot", type=int, default=1, help="k-shot")
@@ -86,7 +86,7 @@ if __name__ == "__main__":
     parser.add_argument("--find_only_one_object", action='store_true', help="Limita a segmentação a apenas um objeto (o de maior confiança).")
     args = parser.parse_args()
 
-    # --- Configurações Iniciai ---
+    # --- Configurações Iniciais ---
     dataset_name = args.dataset; dataset_dir = args.data_path; device = args.device
     k_shot = args.k_shot; image_size = args.image_size; anomaly_threshold = args.anomaly_threshold
     save_path = os.path.join(args.save_path, f"{dataset_name}_sequential_classified") 
@@ -99,7 +99,7 @@ if __name__ == "__main__":
     logger = logging.getLogger(__name__)
     for arg in vars(args): logger.info(f"{arg}: {getattr(args, arg)}")
     
-    # --- Seed e Carregamento de Modelo ---
+    # --- Seed e Carregamento de Modelos ---
     torch.manual_seed(args.seed); np.random.seed(args.seed); random.seed(args.seed)
     if torch.cuda.is_available(): torch.cuda.manual_seed_all(args.seed)
     logger.info(f"Seed para reprodutibilidade definida: {args.seed}")
@@ -155,6 +155,7 @@ if __name__ == "__main__":
                     dataset_base_path = os.path.relpath(dataset_dir, "./data")
                     reference_mask_path = os.path.join("./masks", dataset_base_path, cls_name_on_disk)
                     
+                    # Converte paths para o formato Linux ('/') antes de passar para o segmentador
                     normal_image_paths_linux = [p.replace(os.path.sep, '/') for p in normal_image_paths]
                     
                     logger.info(f"Gerando máscaras de referência (k-shot) em: {reference_mask_path}")
@@ -162,6 +163,7 @@ if __name__ == "__main__":
                     
                     logger.info("Aplicando workaround de renomeação nas máscaras de referência...")
                     for ref_path in normal_image_paths:
+                        # Usa os.path.relpath para deconstruir e reconstruir caminhos de forma segura em qualquer SO
                         relative_path_part = os.path.relpath(ref_path, os.path.join(dataset_dir, cls_name_on_disk))
                         img_name_slug_dir = os.path.dirname(relative_path_part)
                         img_name_slug_base = os.path.splitext(os.path.basename(relative_path_part))[0]
@@ -180,6 +182,7 @@ if __name__ == "__main__":
                             raise FileNotFoundError(f"Máscara {actual_mask_file} não gerada E destino {expected_mask_path} não existe.")
                 
                 normal_images = torch.cat([image_transform(Image.open(x).convert("RGB")).unsqueeze(0) for x in normal_image_paths], dim=0).to(device)
+                # Passa a lista de paths no formato linux para a função setup 
                 setup_data = {"few_shot_samples": normal_images, "dataset_category": cls_name_on_disk, "image_path": normal_image_paths_linux}
                 UniVAD_model.setup(setup_data)
                 logger.info(f"Setup do UniVAD para {cls_name} concluído.")
@@ -190,12 +193,14 @@ if __name__ == "__main__":
                 cls_name_on_disk = cls_name.replace(" ", "_")
                 dataset_base_path = os.path.relpath(dataset_dir, "./data")
                 mask_output_dir = os.path.join("./masks", dataset_base_path, cls_name_on_disk)
+                # Garante que o path de teste use '/' para o segmentador
                 image_path_linux = image_path.replace(os.path.sep, '/')
                 
                 seg_start_time = time.time()
                 segmentation_handler.segment([image_path_linux], mask_output_dir, grounding_config)
                 seg_time = time.time() - seg_start_time
                 
+                # Usa a mesma lógica robusta com os.path.relpath para a imagem de teste 
                 relative_path_part_test = os.path.relpath(image_path, os.path.join(dataset_dir, cls_name_on_disk))
                 img_name_slug_dir_test = os.path.dirname(relative_path_part_test)
                 img_name_slug_base_test = os.path.splitext(os.path.basename(relative_path_part_test))[0]
@@ -215,6 +220,7 @@ if __name__ == "__main__":
                     continue
 
             with torch.no_grad():
+                # Passa o path no formato linux para o modelo UniVAD
                 image_path_linux = image_path.replace(os.path.sep, '/')
                 pred_start_time = time.time()
                 pred_value = UniVAD_model(image, image_path_linux, image_pil, debug=args.debug)
@@ -271,7 +277,7 @@ if __name__ == "__main__":
                 results["cls_names"].pop(); results["imgs_masks"].pop(); results["gt_sp"].pop()
             continue
 
-    # --- Relatórios Finail ---
+    # --- Relatórios Finais ---
     logger.info("\n" + "="*80 + "\nRelatório Final de Métricas (Threshold-Independente)\n" + "="*80)
     table_ls, auroc_sp_ls, auroc_px_ls = [], [], []
     processed_obj_list = sorted(list(set(results.get("cls_names", []))))
