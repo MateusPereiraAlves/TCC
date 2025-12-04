@@ -2,7 +2,7 @@ import numpy as np
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-# Adicione esta linha:
+
 from .GroundingDINO.groundingdino.datasets import transforms as T# segment anything
 from .segment_anything import (
     sam_model_registry,
@@ -32,12 +32,9 @@ from PIL import Image, ImageOps
 import yaml
 import time
 
-# models/component_segmentaion.py
-
 from tqdm import tqdm
 from .grounded_sam import load_image, load_model as gs_load_model, get_grounding_output
 
-# --- INÍCIO: Funções auxiliares EXATAMENTE como no seu original ---
 def turn_binary_to_int(mask):
     temp = np.where(mask, 255, 0).astype(np.uint8)
     return temp
@@ -75,7 +72,6 @@ def split_masks_from_one_mask_torch(masks):
         if torch.sum(mask != 0) / (H * W) > 0.001:
             result_masks.append(mask)
     return result_masks
-# --- FIM: Funções auxiliares ---
 
 class SegmentationHandler:
     def __init__(self, device="cuda"):
@@ -98,7 +94,6 @@ class SegmentationHandler:
         print("Carregando modelo GroundingDINO na VRAM...")
         self.grounding_dino_model = gs_load_model(GROUNDING_DINO_CONFIG_PATH, GROUNDING_DINO_CHECKPOINT_PATH, self.device)
         print("Carregando modelo Segment Anything (SAM) na VRAM...")
-        # --- CORRIGIDO: Bloco lógico para carregar SAM Base/Large ou SAM-HQ ---
         # Extrai o nome do arquivo, ex: "sam_vit_l.pth" ou "sam_hq_vit_h.pth"
         checkpoint_filename = os.path.basename(SAM_CHECKPOINT_PATH)
         
@@ -117,8 +112,6 @@ class SegmentationHandler:
             model_key = base_name.replace('sam_', '')
             sam = sam_model_registry[model_key](SAM_CHECKPOINT_PATH).to(self.device)
         
-        # self.sam_predictor = SamPredictor(sam) # Esta linha já deve existir logo abaixo
-        # --- Fim do Bloco Corrigido ---
         self.sam_predictor = SamPredictor(sam)
         print("Modelos de segmentação prontos para uso.")
 
@@ -126,7 +119,7 @@ class SegmentationHandler:
         if self.grounding_dino_model is None or self.sam_predictor is None:
             raise RuntimeError("Modelos não carregados. Chame `load_models()` primeiro.")
 
-        # --- LÓGICA DE RETRY (3 TENTATIVAS) ---
+        # LÓGICA DE RETRY (3 TENTATIVAS)
         initial_box_thresh = config['box_threshold']
         initial_text_thresh = config['text_threshold']
         text_prompt = config['text_prompt']
@@ -134,12 +127,9 @@ class SegmentationHandler:
         NUM_ATTEMPTS = 3  # 1 tentativa inicial + 2 retries
         RETRY_STEP = 0.1  # Quanto "afrouxar" a cada tentativa
         MIN_THRESH = 0.15 # Limite mínimo para não afrouxar demais
-        # --- FIM DA LÓGICA DE RETRY ---
 
         for image_path in tqdm(image_paths, desc="Gerando Máscaras (rápido)"):
             try:
-                # --- INÍCIO: CARREGAMENTO UNIFICADO E CORRIGIDO ---
-                
                 # 1. Carregar com PIL e corrigir orientação EXIF
                 pil_image_raw = Image.open(image_path)
                 image_pil = ImageOps.exif_transpose(pil_image_raw).convert("RGB")
@@ -148,7 +138,6 @@ class SegmentationHandler:
                 image_source = np.array(image_pil) 
                 
                 # 3. Criar 'image_tensor' (formato tensor) para GroundingDINO
-                #    Replicando a transformação EXATA do grounded_sam.py original
                 transform_g = T.Compose(
                     [
                         T.RandomResize([800], max_size=1333),
@@ -158,32 +147,28 @@ class SegmentationHandler:
                 )
                 
                 # A transformação T do GroundingDINO espera (imagem, alvo) e retorna (imagem, alvo)
-                # Passamos 'None' como o alvo, como o código original fazia.
                 image_tensor, _ = transform_g(image_pil, None) 
                 image_tensor = image_tensor.to(self.device) # Tensor 3D [C, H_redimensionada, W_redimensionada]
                 
                 # 4. Definir H, W a partir da imagem corrigida
                 H, W = image_source.shape[0], image_source.shape[1]
                 
-                # --- FIM: CARREGAMENTO UNIFICADO E CORRIGIDO ---
-
                 # Inicializa os thresholds atuais e os tensores de resultado
                 current_box_thresh = initial_box_thresh
                 current_text_thresh = initial_text_thresh
                 boxes_filt = torch.empty(0).to(self.device) # Começa com um tensor vazio
                 pred_phrases = []
 
-                # --- LÓGICA DE RETRY: Loop de 3 Tentativas ---
+                # Loop de 3 Tentativas
                 for attempt in range(NUM_ATTEMPTS):
                     print(f"  -> Segmentação: Tentativa {attempt + 1}/{NUM_ATTEMPTS} (Box Th: {current_box_thresh:.2f}, Text Th: {current_text_thresh:.2f})...")
                     
-                    # Usa o 'image_tensor' corrigido
                     boxes_filt, pred_phrases = get_grounding_output(
                         self.grounding_dino_model, image_tensor, text_prompt, 
                         current_box_thresh, current_text_thresh, device=self.device
                     )
 
-                    # Se encontrou algo, sucesso! Sair do loop.
+                    # Se encontrou algo, sair do loop.
                     if boxes_filt.size(0) > 0:
                         print(f"  -> Sucesso na Tentativa {attempt + 1}.")
                         break
@@ -201,8 +186,6 @@ class SegmentationHandler:
                             print(f"  -> Thresholds no mínimo ({MIN_THRESH}). Parando as tentativas.")
                             break
                     
-                # --- FIM DO LOOP DE RETRY ---
-
                 # Aplicar o filtro Top-1 DEPOIS de ter os boxes (da tentativa bem-sucedida)
                 if find_only_one_object and boxes_filt.size(0) > 0:
                     print(f"  -> AVISO: Limitando a 1 objeto (de {boxes_filt.size(0)} encontrados).")
@@ -225,7 +208,6 @@ class SegmentationHandler:
                     boxes_filt_scaled[i][2:] += boxes_filt_scaled[i][:2]
                 boxes_filt_cpu = boxes_filt_scaled.cpu()
 
-                # --- Lógica de Segurança (para UnboundLocalError) ---
                 # Se mesmo após todas as tentativas não achou nada, cria máscaras vazias.
                 if len(boxes_filt_cpu) == 0:
                     print(f"  -> AVISO: Nenhum objeto encontrado em {os.path.basename(image_path)} (após {NUM_ATTEMPTS} tentativas).")
@@ -266,7 +248,6 @@ class SegmentationHandler:
                     else:
                         final_masks = np.zeros((H, W), dtype=np.uint8)
                         color_mask = np.zeros((H, W, 3), dtype=np.uint8)
-                # --- FIM da Lógica de Segurança ---
 
                 # Lógica de salvamento
                 image_name_slug = '/'.join((image_path.split(".")[-2]).split("/")[-3:])
@@ -283,7 +264,6 @@ class SegmentationHandler:
                 traceback.print_exc()
                 continue
             
-# --- Funções Auxiliares do seu Script Original (para `merge_masks`) ---
 def merge_masks(masks):
     if not isinstance(masks, (list, np.ndarray)) or len(masks) == 0:
         return np.array([])
